@@ -14,14 +14,17 @@ class LLMClient:
         self.model = model
         self.json = json
 
-    def generate(self, prompt: str, temperature: float = 0.7) -> str:
+    def generate(self, prompt: str, temperature: float = 0.7,
+                 json: bool | None = None) -> str:
+        # 允许按调用覆盖 JSON 模式（None 时使用实例默认 self.json）
+        use_json = self.json if json is None else json
         response = Generation.call(
             api_key=self.api_key,
             model=self.model,
             prompt=prompt,
             temperature=temperature,
             result_format="message",
-            response_format={"type": "json_object"} if self.json else None
+            response_format={"type": "json_object"} if use_json else None
         )
         if response.status_code == 200:
             return response.output.choices[0].message.content.strip()

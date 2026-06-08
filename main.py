@@ -18,6 +18,13 @@ import sys
 import argparse
 from pathlib import Path
 
+# Windows 终端默认编码可能不是 UTF-8，强制重配置 stdout/stderr 避免中文乱码/报错
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from dotenv import load_dotenv
 
 # 加载 .env 文件
@@ -150,12 +157,12 @@ def print_rag_result(result: dict):
 
 
 def check_env() -> dict:
-    """检查并返回环境变量"""
-    required = {
-        "DASHSCOPE_API_KEY": os.getenv("DASHSCOPE_API_KEY"),
-        "DASHVECTOR_API_KEY": os.getenv("DASHVECTOR_API_KEY"),
-        "DASHVECTOR_HOTEL_ENDPOINT": os.getenv("DASHVECTOR_HOTEL_ENDPOINT"),
-    }
+    """检查并返回环境变量。
+
+    本地向量模式（默认）只需 DASHSCOPE_API_KEY；DASHVECTOR_* 仅在使用云端
+    向量库（USE_DASHVECTOR=1）时才需要，因此此处不作强制要求。
+    """
+    required = {"DASHSCOPE_API_KEY": os.getenv("DASHSCOPE_API_KEY")}
     missing = [k for k, v in required.items() if not v]
     if missing:
         print(f"错误: 缺少环境变量: {', '.join(missing)}")
@@ -178,7 +185,11 @@ def main():
     )
     parser.add_argument("query", type=str, help="用户问题")
     parser.add_argument("--verbose", "-v", action="store_true", help="显示详细检索信息")
-    parser.add_argument("--hyde", action="store_true", help="启用 HyDE 增强召回")
+    parser.add_argument("--hyde", action="store_true", help="启用 HyDE 增强召回（默认等价于 --hyde-mode full）")
+    parser.add_argument("--hyde-mode", type=str, default=None,
+                        choices=["full", "light", "conditional"],
+                        help="HyDE 模式: full(3条假设评论) / light(1条综合假设评论) / "
+                             "conditional(按问题类型决定是否启用)。指定该参数即视为启用 HyDE")
     parser.add_argument("--no-ranking", action="store_true", help="禁用排序")
     parser.add_argument("--no-expansion", action="store_true", help="禁用意图扩展")
     parser.add_argument("--no-bm25", action="store_true", help="禁用 BM25 召回")
@@ -196,6 +207,20 @@ def main():
 
     args = parser.parse_args()
 
+    # 解析 HyDE 开关与模式：
+    #   - 指定 --hyde-mode 即启用 HyDE，并使用对应模式
+    #   - 仅指定 --hyde 时启用 HyDE，模式默认为 full（兼容原有逻辑）
+    #   - 都不指定则不启用 HyDE（baseline）
+    if args.hyde_mode is not None:
+        enable_hyde = True
+        hyde_mode = args.hyde_mode
+    elif args.hyde:
+        enable_hyde = True
+        hyde_mode = "full"
+    else:
+        enable_hyde = False
+        hyde_mode = "full"
+
     # 检查环境变量
     env = check_env()
 
@@ -211,8 +236,9 @@ def main():
 
     data_dir = Path(__file__).parent / "data"
 
-    # 检查数据文件
-    for f in ["inverted_index.pkl", "chroma_db", "filtered_comments.csv"]:
+    # 检查数据文件（本地向量模式需要 inverted_index.pkl / filtered_comments.csv /
+    # comment_vectors.npz；最后一个由 build_local_index.py 生成，缺失时在初始化阶段报错）
+    for f in ["inverted_index.pkl", "filtered_comments.csv"]:
         if not (data_dir / f).exists():
             print(f"错误: 数据文件不存在: {data_dir / f}")
             sys.exit(1)
@@ -221,13 +247,17 @@ def main():
     print("正在初始化 RAG 系统...")
     from rag_system import HotelReviewRAG
 
+    # 是否使用云端 DashVector（默认走本地 numpy 向量库）
+    use_local_vectors = os.getenv("USE_DASHVECTOR", "").strip() != "1"
+
     rag = HotelReviewRAG(
         api_key=env["DASHSCOPE_API_KEY"],
-        dashvector_api_key=env["DASHVECTOR_API_KEY"],
-        dashvector_endpoint=env["DASHVECTOR_HOTEL_ENDPOINT"],
+        dashvector_api_key=os.getenv("DASHVECTOR_API_KEY"),
+        dashvector_endpoint=os.getenv("DASHVECTOR_HOTEL_ENDPOINT"),
         data_dir=data_dir,
         intl_api_key=intl_api_key,
-        generation_model=args.model
+        generation_model=args.model,
+        use_local_vectors=use_local_vectors,
     )
     print("RAG 系统初始化完成\n")
 
@@ -237,7 +267,8 @@ def main():
 
     result = rag.query(
         args.query,
-        enable_hyde=args.hyde,
+        enable_hyde=enable_hyde,
+        hyde_mode=hyde_mode,
         enable_expansion=not args.no_expansion,
         enable_bm25=not args.no_bm25,
         enable_vector=not args.no_vector,

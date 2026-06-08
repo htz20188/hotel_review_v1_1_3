@@ -2,11 +2,18 @@
 
 import re
 import math
-import nltk
 import jieba
 import pickle
 from pathlib import Path
 from collections import Counter
+
+# nltk 仅在提供英文停用词文件时才会用到；其依赖链（scipy）在部分环境下
+# 与 numpy 2.x 存在二进制不兼容。这里改为惰性/可选导入，避免在仅从 pickle
+# 加载索引（不需要 nltk）的常规路径上因导入失败而整体崩溃。
+try:
+    import nltk
+except Exception:
+    nltk = None
 
 try:
     from tqdm.notebook import tqdm
@@ -31,6 +38,8 @@ class InvertedIndex:
             with open(stopwords_file, encoding='utf-8') as f:
                 self.stopwords.update([line.strip() for line in f])
             try:
+                if nltk is None:
+                    raise ImportError("nltk 不可用")
                 self.stopwords.update(nltk.corpus.stopwords.words('english'))
             except Exception:
                 print("警告: 未能加载 NLTK 英文停用词")

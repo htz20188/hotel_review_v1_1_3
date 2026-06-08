@@ -5,6 +5,39 @@ import time
 from dashscope import Generation
 
 
+# ── HyDE 条件触发关键词（方向 11：条件 HyDE） ───────────────────────
+# 明确属性类问题：直接检索通常已足够，默认不开 HyDE
+HYDE_ATTRIBUTE_KEYWORDS = [
+    '早餐', '地铁', '停车', '套房', '泳池', '健身房',
+    '隔音', '卫生', '价格', '房型', '位置'
+]
+# 宽泛体验类问题：意图模糊，HyDE 有助于扩大语义召回，默认开启
+HYDE_BROAD_KEYWORDS = [
+    '整体', '体验', '适合', '推荐', '怎么样', '如何',
+    '值得', '满意', '入住感受', '商务', '亲子'
+]
+
+
+def should_use_hyde(query: str) -> bool:
+    """条件 HyDE 决策：根据问题类型决定是否启用 HyDE。
+
+    规则简单可解释：
+    - 命中"明确属性关键词"（如早餐、套房、价格等）→ 不开 HyDE，直接检索即可；
+    - 命中"宽泛体验关键词"（如整体、体验、推荐等）→ 开启 HyDE 扩大召回；
+    - 两者都未命中（较模糊的问题）→ 默认开启 HyDE。
+
+    注意：属性关键词优先级更高。例如"套房整体怎么样"虽含"整体/怎么样"，
+    但其核心是具体房型属性，因此判为不需要 HyDE。
+    """
+    for kw in HYDE_ATTRIBUTE_KEYWORDS:
+        if kw in query:
+            return False
+    for kw in HYDE_BROAD_KEYWORDS:
+        if kw in query:
+            return True
+    return True
+
+
 class IntentRecognizer:
     """意图识别器：判断问题是否需要检索知识库"""
 
@@ -169,12 +202,63 @@ class IntentExpander:
 
 
 class HyDEGenerator:
-    """假设性回复生成器：为单个 Query 生成假设回复用于增强检索"""
+    """假设性回复生成器：为单个 Query 生成假设回复用于增强检索
 
-    def __init__(self, llm_client):
+    支持两种生成模式（方向 11：HyDE 优化）：
+    - "full": 原始逻辑，生成 3 条假设评论（2 正 1 负），召回更全但延迟更高；
+    - "light": 轻量模式，仅生成 1 条综合性假设评论，延迟更低。
+
+    mode 既可在构造时指定，也可在调用 generate() 时临时覆盖。
+    """
+
+    def __init__(self, llm_client, mode: str = "full"):
         self.llm_client = llm_client
+        self.mode = mode
 
-    def generate(self, query: str) -> list[str]:
+    def generate(self, query: str, mode: str | None = None) -> list[str]:
+        """生成假设性评论。mode 为 None 时使用实例默认 self.mode。"""
+        effective_mode = mode or self.mode
+        if effective_mode == "light":
+            return self._generate_light(query)
+        return self._generate_full(query)
+
+    def _generate_light(self, query: str) -> list[str]:
+        """轻量 HyDE：只生成 1 条综合性假设评论（同时含正负面信息）。"""
+        prompt = f"""请基于用户问题生成 1 条可能出现在酒店评论中的综合性假设评论，\
+同时包含可能的正面和负面信息，不要编造具体酒店名称，不要输出解释，只输出假设评论文本。
+
+【用户问题】
+{query}
+"""
+        for i in range(2):
+            try:
+                # 该 client 默认开启 json 模式，这里关闭以获取纯文本
+                response = self.llm_client.generate(prompt, temperature=0.7, json=False)
+                text = response.replace('```json', '').replace('```', '').strip()
+                # 容错：若模型仍返回了 JSON，尝试抽取其中的文本
+                if text.startswith('{') or text.startswith('['):
+                    try:
+                        data = json.loads(text)
+                        if isinstance(data, dict):
+                            vals = list(data.values())
+                            text = str(vals[0]) if vals else text
+                        elif isinstance(data, list) and data:
+                            text = str(data[0])
+                    except Exception:
+                        pass
+                if text:
+                    return [text]
+                raise ValueError("空的假设评论")
+            except Exception as e:
+                print(f"轻量假设性回复生成第 {i+1} 次尝试失败: {e}")
+                if i < 1:
+                    time.sleep(0.1)
+                    continue
+
+        print("轻量假设性回复生成失败，已返回原查询")
+        return [query]
+
+    def _generate_full(self, query: str) -> list[str]:
         prompt = f"""
 你是一个酒店评论撰写者，需要为以下查询生成假设性的评论回复。
 

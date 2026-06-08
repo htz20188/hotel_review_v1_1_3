@@ -12,7 +12,7 @@ import chromadb
 from config import TODAY, EXACT_ROOM_TYPES, FUZZY_ROOM_TYPES
 from clients import LLMClient, EmbeddingClient
 from index import InvertedIndex
-from intent import IntentRecognizer, IntentDetector, IntentExpander, HyDEGenerator
+from intent import IntentRecognizer, IntentDetector, IntentExpander, HyDEGenerator, should_use_hyde
 from retriever import HybridRetriever
 from ranker import Reranker, MultiFactorRanker
 from generator import ResponseGenerator
@@ -37,17 +37,37 @@ class HotelReviewRAG:
                  intl_api_key: str = None,
                  detection_model: str = "qwen-plus",
                  expansion_hyde_model: str = "qwen-flash",
-                 generation_model: str = "qwen-plus"):
-        # 连接向量数据库
-        dashvector_client = dashvector.Client(
-            api_key=dashvector_api_key, endpoint=dashvector_endpoint
-        )
-        self.comments_collection = dashvector_client.get("comment_database")
-        self.reverse_queries_collection = dashvector_client.get("reverse_query_database")
-
-        chroma_db_path = data_dir / "chroma_db"
-        chroma_client = chromadb.PersistentClient(path=str(chroma_db_path))
-        self.summaries_collection = chroma_client.get_collection("summary_database")
+                 generation_model: str = "qwen-plus",
+                 use_local_vectors: bool = True):
+        # 评论/反向向量库后端：
+        #   use_local_vectors=True（默认）→ 使用本地 numpy 向量库（data/comment_vectors.npz），
+        #     不依赖云端 DashVector 与 chromadb；反向 Query / 摘要路无本地数据，用空集合占位。
+        #   use_local_vectors=False → 使用原云端 DashVector（需可用的 endpoint）。
+        # 注：原云端 DashVector 集群已失效、且本机 chromadb/onnxruntime 原生组件不稳定，
+        #     故默认走本地向量库；该后端对 LTR / 多样性等下游模块透明（接口一致）。
+        if use_local_vectors:
+            from local_vector import (
+                LocalCommentCollection, EmptyCollection,
+                EmptySummaryCollection, VECTORS_FILE,
+            )
+            npz_path = data_dir / VECTORS_FILE
+            if not npz_path.exists():
+                raise FileNotFoundError(
+                    f"本地评论向量文件不存在: {npz_path}\n"
+                    "请先运行: python build_local_index.py"
+                )
+            self.comments_collection = LocalCommentCollection.load(npz_path)
+            self.reverse_queries_collection = EmptyCollection()
+            self.summaries_collection = EmptySummaryCollection()
+        else:
+            chroma_db_path = data_dir / "chroma_db"
+            chroma_client = chromadb.PersistentClient(path=str(chroma_db_path))
+            self.summaries_collection = chroma_client.get_collection("summary_database")
+            dashvector_client = dashvector.Client(
+                api_key=dashvector_api_key, endpoint=dashvector_endpoint
+            )
+            self.comments_collection = dashvector_client.get("comment_database")
+            self.reverse_queries_collection = dashvector_client.get("reverse_query_database")
 
         # 加载倒排索引
         self.inverted_index = InvertedIndex()
@@ -101,6 +121,7 @@ class HotelReviewRAG:
               enable_vector: bool = True,
               enable_reverse: bool = True,
               enable_hyde: bool = False,
+              hyde_mode: str = "full",
               enable_summary: bool = True,
               enable_ranking: bool = True,
               enable_generation: bool = True,
@@ -185,6 +206,7 @@ class HotelReviewRAG:
                     'intent_detection': None,
                     'intent_expansion': None
                 },
+                'hyde': {'requested': enable_hyde, 'mode': hyde_mode, 'used': False},
                 'timing': timing
             }
 
@@ -198,6 +220,20 @@ class HotelReviewRAG:
                              if intent_expansion_result
                              else [{'query': user_query, 'weight': 1.0}])
 
+        # HyDE 模式解析（方向 11）：决定本次是否实际启用 HyDE，以及生成模式
+        #   full        : 启用，生成 3 条假设评论（原始逻辑）
+        #   light       : 启用，仅生成 1 条综合性假设评论（低延迟）
+        #   conditional : 由 should_use_hyde() 按问题类型决定是否启用；启用时用 full 生成
+        used_hyde = enable_hyde
+        if enable_hyde:
+            if hyde_mode == "conditional":
+                used_hyde = should_use_hyde(user_query)
+                self.hyde_generator.mode = "full"
+            elif hyde_mode == "light":
+                self.hyde_generator.mode = "light"
+            else:  # full（默认）
+                self.hyde_generator.mode = "full"
+
         if use_ltr:
             # LTR 模式：收集所有候选文档（不进行 RRF 融合）
             comments, summaries, retrieval_timing, hyde_results = self.retriever.retrieve_for_ltr(
@@ -208,7 +244,7 @@ class HotelReviewRAG:
                 enable_bm25=enable_bm25,
                 enable_vector=enable_vector,
                 enable_reverse=enable_reverse,
-                enable_hyde=enable_hyde,
+                enable_hyde=used_hyde,
                 enable_summary=enable_summary
             )
         else:
@@ -221,7 +257,7 @@ class HotelReviewRAG:
                 enable_bm25=enable_bm25,
                 enable_vector=enable_vector,
                 enable_reverse=enable_reverse,
-                enable_hyde=enable_hyde,
+                enable_hyde=used_hyde,
                 enable_summary=enable_summary
             )
         timing['retrieval'] = retrieval_timing
@@ -346,6 +382,11 @@ class HotelReviewRAG:
                 'intent_recognition': need_retrieval,
                 'intent_detection': intent_detection_result,
                 'intent_expansion': intent_expansion_result
+            },
+            'hyde': {
+                'requested': enable_hyde,
+                'mode': hyde_mode,
+                'used': used_hyde
             },
             'timing': timing
         }
