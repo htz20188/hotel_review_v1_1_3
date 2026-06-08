@@ -1,0 +1,27 @@
+# 敏感文件
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 数据文件（太大或有敏感信息）
+data/inverted_index.pkl
+data/chroma_db/
+data/filtered_comments.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/

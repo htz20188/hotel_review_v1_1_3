@@ -1,0 +1,11 @@
+dashscope
+dashvector
+chromadb
+pandas
+numpy
+nltk
+jieba
+tqdm
+python-dotenv
+lightgbm
+scikit-learn
