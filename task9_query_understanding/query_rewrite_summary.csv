@@ -1,0 +1,3 @@
+﻿version,num_queries,parse_success_rate,mean_intent_coverage,mean_num_rewritten_queries,mean_latency_seconds
+after,25,1.0,0.7153,2.04,1.0249
+before,25,1.0,0.6807,2.0,1.0678
