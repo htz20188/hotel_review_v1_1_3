@@ -25,3 +25,6 @@ data/filtered_comments.csv
 
 # Jupyter
 .ipynb_checkpoints/
+
+# local numpy vector store (regenerable via build_local_index.py)
+data/comment_vectors.npz
