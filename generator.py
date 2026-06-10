@@ -86,7 +86,7 @@ class ResponseGenerator:
             summaries_context += "【相关评论摘要】\n"
             for s in summaries:
                 summaries_context += f"""
-【{s['metadata']['category']}类别摘要】
+【{s['metadata'].get('category','未分类')}类别摘要】
 关键词: {s['metadata']['keywords']}
 摘要: {s['summary']}
 """
