@@ -1,0 +1,2 @@
+﻿version,num_examples,parse_success_rate,mean_intent_coverage,mean_latency_seconds
+finetuned_lora,8,1.0,0.6354,3.4614
