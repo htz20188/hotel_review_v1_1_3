@@ -19,6 +19,8 @@ from generator import ResponseGenerator
 from ltr import LTRRanker
 from diversity import DiversityReranker
 
+from comment_analyzer import CommentAnalyzer
+
 
 def load_comments_from_csv(csv_path: str) -> pd.DataFrame:
     """从本地 CSV 加载评论数据（替代 Insforge 数据库）"""
@@ -93,6 +95,16 @@ class HotelReviewRAG:
         detection_client = LLMClient(key, model=detection_model, json=True)
         expansion_hyde_client = LLMClient(key, model=expansion_hyde_model, json=True)
         embedding_client = EmbeddingClient(key)
+
+        # 初始化评论分析器
+        self.comment_analyzer = CommentAnalyzer()
+        # 如果有训练好的模型，加载它
+        model_path = data_dir / "models" / "bert_analyzer"
+        if model_path.exists():
+            self.comment_analyzer.load_pretrained(str(model_path))
+            print("评论分析器已加载")
+        else:
+            print("评论分析器未训练，将使用启发式规则")
 
         self.intent_recognizer = IntentRecognizer(key)
         self.intent_detector = IntentDetector(
@@ -401,3 +413,8 @@ class HotelReviewRAG:
         start = time.time()
         result = func(*args)
         return result, time.time() - start
+
+    def analyze_comment(self, comment: str) -> tuple:
+        """分析单个评论的质量和类别"""
+        return self.comment_analyzer.predict(comment)
+
