@@ -39,7 +39,7 @@ def evaluate_structured_response(rag, test_queries: list):
             query,
             use_ltr=True,
             enable_ranking=True,
-            print_response=False  # 不打印，我们手动解析
+            print_response=True
         )
         
         response = result['response']
@@ -238,39 +238,6 @@ def main():
         json.dump(results, f, indent=2, ensure_ascii=False)
     
     print(f"\n结果已保存到 structured_eval_results.json")
-    
-    # 输出 LaTeX 表格格式（可直接复制到报告）
-    print("\n" + "=" * 60)
-    print("LaTeX 表格代码（复制到报告）")
-    print("=" * 60)
-    print("""
-\\begin{table}[H]
-\\centering
-\\caption{结构化回复质量评估（10 个查询平均）}
-\\begin{tabular}{@{}lccc@{}}
-\\toprule
-\\textbf{评估维度} & \\textbf{原有提示词} & \\textbf{结构化提示词} & \\textbf{提升} \\\\
-\\midrule
-信息完整性 & {:.3f} & {:.3f} & +{:.1f}\\% \\\\
-信息可读性 & {:.3f} & {:.3f} & +{:.1f}\\% \\\\
-引用准确性 & {:.3f} & {:.3f} & +{:.1f}\\% \\\\
-信息密度（词/句） & {:.1f} & {:.1f} & -{:.1f}\\% \\\\
-格式解析成功率 & {:.1%} & {:.1%} & +{:.1%} \\\\
-\\bottomrule
-\\end{tabular}
-\\end{table}
-    """.format(
-        baseline_summary['completeness'], structured_summary['completeness'],
-        (structured_summary['completeness'] - baseline_summary['completeness']) / baseline_summary['completeness'] * 100,
-        baseline_summary['readability'], structured_summary['readability'],
-        (structured_summary['readability'] - baseline_summary['readability']) / baseline_summary['readability'] * 100,
-        baseline_summary['citation_accuracy'], structured_summary['citation_accuracy'],
-        (structured_summary['citation_accuracy'] - baseline_summary['citation_accuracy']) / baseline_summary['citation_accuracy'] * 100 if baseline_summary['citation_accuracy'] > 0 else 0,
-        baseline_summary['info_density'], structured_summary['info_density'],
-        (baseline_summary['info_density'] - structured_summary['info_density']) / baseline_summary['info_density'] * 100,
-        baseline_summary.get('parse_success_rate', 0), structured_summary['parse_success_rate'],
-        structured_summary['parse_success_rate'] - baseline_summary.get('parse_success_rate', 0)
-    ))
 
 
 if __name__ == "__main__":
